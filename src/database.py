@@ -1,6 +1,7 @@
 import psycopg2
 import psycopg2.extras # Để sử dụng RealDictCursor
 from datetime import datetime, timezone # Thêm timezone
+import config
 import os
 
 # --- Cấu hình kết nối PostgreSQL ---
@@ -25,7 +26,7 @@ def get_db_connection():
         return conn
     except psycopg2.OperationalError as e:
         print(f"Lỗi nghiêm trọng: Không thể kết nối đến PostgreSQL server.")
-        print(f"Thông tin kết nối: Host={DB_HOST}, DB={DB_NAME}, User={DB_USER}, Port={DB_PORT}")
+        print(f"Thông tin kết nối: Host={DB_HOST}, DB={DB_NAME}, User={DB_USER}, Port={DB_PORT}, Password={DB_PASSWORD}")
         print(f"Chi tiết lỗi: {e}")
         print("Vui lòng kiểm tra:")
         print("1. PostgreSQL server có đang chạy không.")
@@ -37,9 +38,8 @@ def get_db_connection():
 def create_tables_postgres():
     """
     Tạo các bảng trong cơ sở dữ liệu PostgreSQL nếu chúng chưa tồn tại.
-    Sử dụng SQL script đã định nghĩa ở trên.
     """
-    # SQL Script được nhúng vào đây để tiện quản lý, hoặc có thể đọc từ file .sql
+    # Tạo bảng cho tỷ giá
     sql_script = """
     CREATE TABLE IF NOT EXISTS Currencies (
         id SERIAL PRIMARY KEY,
@@ -72,14 +72,17 @@ def create_tables_postgres():
         with conn.cursor() as cursor:
             cursor.execute(sql_script)
         conn.commit()
-        print(f"Đã kiểm tra/khởi tạo bảng trong PostgreSQL database '{DB_NAME}'.")
+        print(f"Đã kiểm tra/khởi tạo bảng tỷ giá trong PostgreSQL database '{DB_NAME}'.")
     except psycopg2.Error as e:
-        print(f"Lỗi khi tạo bảng trong PostgreSQL: {e}")
+        print(f"Lỗi khi tạo bảng tỷ giá trong PostgreSQL: {e}")
         if conn:
             conn.rollback()
     finally:
         if conn:
             conn.close()
+    
+    # Tạo bảng cho giá vàng
+    create_gold_tables()
 
 def get_or_create_currency(code, name):
     """
@@ -221,3 +224,196 @@ def get_latest_rates():
         if conn:
             conn.close()
     return rates
+
+def create_gold_tables():
+    """
+    Tạo các bảng liên quan đến giá vàng trong PostgreSQL nếu chúng chưa tồn tại.
+    """
+    sql_script = """
+    CREATE TABLE IF NOT EXISTS GoldTypes (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,  -- Đổi full_name thành name
+        original_type VARCHAR(255) NOT NULL,  -- Đổi original_type_name thành original_type
+        city VARCHAR(100),  -- Đổi city_name thành city
+        provider VARCHAR(50) NOT NULL,
+        UNIQUE(name, provider)
+    );
+
+    CREATE TABLE IF NOT EXISTS GoldPrices (
+        id SERIAL PRIMARY KEY,
+        gold_type_id INTEGER NOT NULL,
+        date_recorded TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        buy_price NUMERIC(18, 4),
+        sell_price NUMERIC(18, 4),
+        unit VARCHAR(20) NOT NULL,
+        source_update_time TIMESTAMP WITH TIME ZONE,
+        CONSTRAINT fk_gold_type
+            FOREIGN KEY (gold_type_id)
+            REFERENCES GoldTypes (id)
+            ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_goldtypes_provider ON GoldTypes (provider);
+    CREATE INDEX IF NOT EXISTS idx_goldprices_gold_type_id ON GoldPrices (gold_type_id);
+    CREATE INDEX IF NOT EXISTS idx_goldprices_date_recorded ON GoldPrices (date_recorded DESC);
+    CREATE INDEX IF NOT EXISTS idx_goldprices_source_update_time ON GoldPrices (source_update_time DESC);
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(sql_script)
+        conn.commit()
+        print(f"Đã kiểm tra/khởi tạo bảng giá vàng trong PostgreSQL database '{DB_NAME}'.")
+    except psycopg2.Error as e:
+        print(f"Lỗi khi tạo bảng giá vàng trong PostgreSQL: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+
+def get_or_create_gold_type(full_name, original_type_name, city_name, provider='SJC'):
+    """
+    Lấy ID của một loại vàng dựa trên tên đầy đủ (tham số full_name của Python, ứng với cột 'name' trong DB).
+    Nếu không tồn tại, tạo mới và trả về ID.
+    """
+    conn = None
+    gold_type_id = None
+    try:
+        conn = get_db_connection()
+        if conn is None: # Thêm kiểm tra nếu get_db_connection có thể trả về None
+            raise ConnectionError("Không thể kết nối đến cơ sở dữ liệu.")
+
+        with conn.cursor() as cursor:
+            # Sử dụng cột 'name' trong câu lệnh SQL, giá trị lấy từ biến Python 'full_name'
+            sql_select = "SELECT id FROM GoldTypes WHERE name = %s AND provider = %s"
+            cursor.execute(sql_select, (full_name, provider))
+            row = cursor.fetchone()
+            
+            if row:
+                gold_type_id = row[0]
+            else:
+                try:
+                    # Sử dụng cột 'name' trong câu lệnh SQL INSERT
+                    sql_insert = """INSERT INTO GoldTypes (name, original_type_name, city_name, provider) 
+                                    VALUES (%s, %s, %s, %s) RETURNING id"""
+                    cursor.execute(sql_insert, (full_name, original_type_name, city_name, provider))
+                    result = cursor.fetchone()
+                    if result:
+                        gold_type_id = result[0]
+                        conn.commit()
+                        # print(f"Đã thêm loại vàng mới: {full_name} (Provider: {provider}) với ID {gold_type_id}")
+                    else:
+                        # Trường hợp hiếm khi RETURNING id không trả về gì dù không có lỗi
+                        conn.rollback() # Rollback nếu không lấy được ID
+                        print(f"Lỗi: Không nhận được ID sau khi INSERT GoldType '{full_name}'.")
+
+                except psycopg2.errors.UniqueViolation:
+                    conn.rollback() # Quan trọng: rollback transaction bị lỗi
+                    # print(f"Thông tin: Loại vàng '{full_name}' (Provider: {provider}) đã tồn tại do race condition hoặc đã được thêm trước đó.")
+                    # Thử lấy lại ID một lần nữa sau khi rollback
+                    cursor.execute(sql_select, (full_name, provider)) # Dùng lại sql_select
+                    row_after_conflict = cursor.fetchone()
+                    if row_after_conflict:
+                        gold_type_id = row_after_conflict[0]
+                    else:
+                        # Điều này không nên xảy ra nếu UniqueViolation là do 'name' và 'provider'
+                        print(f"LỖI NGHIÊM TRỌNG: Không tìm thấy GoldType '{full_name}' sau khi xử lý UniqueViolation.")
+                except psycopg2.Error as e_insert:
+                    conn.rollback()
+                    print(f"Lỗi khi INSERT GoldType '{full_name}': {e_insert}")
+                    
+    except psycopg2.Error as e:
+        # Bổ sung thêm thông tin vào lỗi để dễ debug hơn
+        print(f"Lỗi CSDL khi get/create GoldType '{full_name}' (Provider: {provider}). SQL SELECT: '{sql_select if 'sql_select' in locals() else 'N/A'}'. Lỗi: {e}")
+        if conn: 
+            conn.rollback()
+    except ConnectionError as e_conn: # Bắt lỗi ConnectionError đã thêm
+        print(e_conn)
+    finally:
+        if conn: 
+            conn.close()
+    return gold_type_id
+
+def insert_gold_price(gold_type_id, buy_price, sell_price, unit, source_update_time_str):
+    """Chèn một bản ghi giá vàng mới vào bảng GoldPrices trong PostgreSQL."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        source_update_time_aware = _parse_datetime_for_postgres(source_update_time_str)
+        
+        with conn.cursor() as cursor:
+            sql = """
+            INSERT INTO GoldPrices 
+                (gold_type_id, buy_price, sell_price, unit, source_update_time)
+            VALUES (%s, %s, %s, %s, %s)
+            """
+            cursor.execute(sql, (
+                gold_type_id,
+                buy_price,
+                sell_price,
+                unit,
+                source_update_time_aware
+            ))
+        conn.commit()
+    except psycopg2.Error as e:
+        print(f"Lỗi khi chèn giá vàng vào PostgreSQL cho gold_type_id {gold_type_id}: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+
+def get_latest_gold_prices():
+    """Lấy các bản ghi giá vàng mới nhất cho mỗi loại vàng từ PostgreSQL."""
+    conn = None
+    prices = []
+    sql_query = "" # Khởi tạo để có thể in ra nếu lỗi
+    try:
+        conn = get_db_connection()
+        if conn is None: # Thêm kiểm tra nếu get_db_connection có thể trả về None
+            raise ConnectionError("Không thể kết nối đến cơ sở dữ liệu để lấy giá vàng.")
+            
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+            # Sử dụng lại CTE của bạn, đây là một cách tốt.
+            # Sửa gt.city thành gt.city_name
+            # Và gt.name đã đúng (trước đó có thể là gt.full_name)
+            sql_query = """
+            WITH latest_prices AS (
+                SELECT 
+                    gp.gold_type_id,
+                    MAX(gp.date_recorded) as latest_date
+                FROM GoldPrices gp
+                GROUP BY gp.gold_type_id
+            )
+            SELECT 
+                gp.id AS gold_price_id, -- Thêm bí danh để tránh trùng tên cột 'id' với GoldTypes.id
+                gp.gold_type_id,
+                gp.date_recorded,
+                gp.buy_price,
+                gp.sell_price,
+                gp.unit,
+                gp.source_update_time,
+                gt.id AS gold_type_table_id, -- Thêm bí danh để phân biệt
+                gt.name as gold_type_name,
+                gt.original_type_name, -- Thêm cột này nếu bạn muốn hiển thị tên gốc
+                gt.provider,
+                gt.city_name  -- << SỬA Ở ĐÂY: gt.city THÀNH gt.city_name
+            FROM GoldPrices gp
+            JOIN GoldTypes gt ON gp.gold_type_id = gt.id
+            JOIN latest_prices lp ON gp.gold_type_id = lp.gold_type_id 
+                AND gp.date_recorded = lp.latest_date
+            ORDER BY gt.provider, gt.name; 
+            """
+            cursor.execute(sql_query)
+            prices = cursor.fetchall()
+    except psycopg2.Error as e:
+        print(f"Lỗi khi lấy giá vàng mới nhất từ PostgreSQL: {e}")
+        print(f"SQL Query đã chạy (hoặc cố gắng chạy): \n{sql_query}") # In ra câu query để debug
+    except ConnectionError as e_conn:
+        print(e_conn)
+    finally:
+        if conn:
+            conn.close()
+    return prices

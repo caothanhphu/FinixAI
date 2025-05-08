@@ -34,3 +34,29 @@ CREATE INDEX IF NOT EXISTS idx_exchangerates_source_update_time ON ExchangeRates
 
 -- Thông báo tạo bảng thành công (tùy chọn)
 -- SELECT 'Bảng Currencies và ExchangeRates đã được tạo/kiểm tra thành công trong PostgreSQL.' AS status;
+
+CREATE TABLE IF NOT EXISTS GoldTypes (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) UNIQUE NOT NULL, -- Ví dụ: "Vàng SJC 1L - 10L - TP. Hồ Chí Minh"
+        original_type_name VARCHAR(255),   -- Ví dụ: "Vàng SJC 1L - 10L" (tên gốc)
+        city_name VARCHAR(100),            -- Ví dụ: "TP. Hồ Chí Minh"
+        provider VARCHAR(50) DEFAULT 'SJC' NOT NULL -- Nhà cung cấp, mặc định SJC
+    );
+
+    CREATE TABLE IF NOT EXISTS GoldPrices (
+        id SERIAL PRIMARY KEY,
+        gold_type_id INTEGER NOT NULL,
+        date_recorded TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        buy_price BIGINT, -- Lưu giá trị nguyên, ví dụ 87500000
+        sell_price BIGINT,
+        unit VARCHAR(50) DEFAULT 'đồng/lượng',
+        source_update_time TIMESTAMP WITH TIME ZONE, -- Thời gian SJC cập nhật
+        CONSTRAINT fk_gold_type
+            FOREIGN KEY (gold_type_id)
+            REFERENCES GoldTypes (id)
+            ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_goldtypes_name ON GoldTypes (name);
+    CREATE INDEX IF NOT EXISTS idx_goldprices_gold_type_id ON GoldPrices (gold_type_id);
+    CREATE INDEX IF NOT EXISTS idx_goldprices_date_recorded ON GoldPrices (date_recorded DESC);

@@ -3,27 +3,7 @@
 import os
 from dotenv import load_dotenv
 
-# Xác định đường dẫn đến thư mục gốc của dự án
-# Giả sử config.py nằm trong src/, thì thư mục gốc là cha của src/
-PROJECT_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-# Đường dẫn đến tệp .env
-# Tệp .env nên nằm ở thư mục gốc của dự án
-DOTENV_PATH = os.path.join(PROJECT_ROOT_DIR, '.env')
-
-# Tải các biến môi trường từ tệp .env
-# Nếu tệp .env không tồn tại, load_dotenv() sẽ không báo lỗi mà chỉ không làm gì cả.
-# Các biến môi trường đã được set ở cấp hệ thống sẽ được ưu tiên hơn so với tệp .env.
-if os.path.exists(DOTENV_PATH):
-    load_dotenv(dotenv_path=DOTENV_PATH)
-    print(f"Đã tải biến môi trường từ: {DOTENV_PATH}")
-else:
-    # Vẫn gọi load_dotenv() phòng trường hợp biến môi trường được cung cấp theo cách khác (vd: Docker, Heroku)
-    # Hoặc nếu bạn không muốn dựa vào file .env cụ thể cho production.
-    load_dotenv() 
-    print(f"Không tìm thấy tệp .env tại {DOTENV_PATH}. Đang cố gắng tải biến môi trường hệ thống (nếu có).")
-
-
+load_dotenv()
 # --- Cấu hình kết nối PostgreSQL ---
 # Lấy giá trị từ biến môi trường, với giá trị mặc định nếu không tìm thấy
 DB_HOST = os.getenv("PG_HOST", "localhost")
@@ -46,8 +26,6 @@ if DB_PASSWORD is None:
 if __name__ == '__main__':
     # Phần này để kiểm tra nhanh xem config có được tải đúng không
     print("\n--- KIỂM TRA CẤU HÌNH ---")
-    print(f"PROJECT_ROOT_DIR: {PROJECT_ROOT_DIR}")
-    print(f"DOTENV_PATH: {DOTENV_PATH}")
     print(f"DB_HOST: {DB_HOST}")
     print(f"DB_NAME: {DB_NAME}")
     print(f"DB_USER: {DB_USER}")
